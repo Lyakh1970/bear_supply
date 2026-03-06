@@ -1,0 +1,17 @@
+# Секреты и локальная конфигурация — не коммитить
+.env
+.env.*
+!.env.example
+# Локальный пример с возможными секретами — не коммитить
+env_example.txt
+
+# Google Cloud / сервисный аккаунт — не коммитить ключи
+*-credentials.json
+*service-account*.json
+google-sa.json
+client_secret.json
+token.pickle
+token.json
+secrets/
+creds/
+uploads/
