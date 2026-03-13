@@ -366,12 +366,18 @@ async def _process_file(update: Update, context: ContextTypes.DEFAULT_TYPE, loca
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка документа."""
+    logger.info(f"handle_document: chat_id={update.message.chat.id}, expected={config.GROUP_ID}")
+    
     if update.message.chat.id != config.GROUP_ID:
+        logger.info(f"Ignoring message from chat {update.message.chat.id} (not our group)")
         return ConversationHandler.END
 
     doc = update.message.document
     if not doc:
+        logger.info("No document in message")
         return ConversationHandler.END
+    
+    logger.info(f"Processing document: {doc.file_name}")
 
     file_obj = await doc.get_file()
     filename = f"{doc.file_unique_id}_{doc.file_name}"
@@ -383,12 +389,17 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка фото."""
+    logger.info(f"handle_photo: chat_id={update.message.chat.id}, expected={config.GROUP_ID}")
+    
     if update.message.chat.id != config.GROUP_ID:
+        logger.info(f"Ignoring photo from chat {update.message.chat.id} (not our group)")
         return ConversationHandler.END
 
     if not update.message.photo:
+        logger.info("No photo in message")
         return ConversationHandler.END
 
+    logger.info("Processing photo...")
     photo = update.message.photo[-1]
     file_obj = await photo.get_file()
 
