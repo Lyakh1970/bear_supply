@@ -2,6 +2,7 @@ import os
 import logging
 from pathlib import Path
 from datetime import date
+from dataclasses import dataclass
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -27,9 +28,13 @@ logger = logging.getLogger(__name__)
 
 Path(config.DOWNLOAD_DIR).mkdir(parents=True, exist_ok=True)
 
+# Глобальный флаг доступности PostgreSQL (проверяется при старте)
+DB_AVAILABLE = False
+
 # Состояния для ConversationHandler (диалоговый режим)
 (
     STATE_DESCRIPTION,
+    STATE_DATE,
     STATE_PRICE,
     STATE_CURRENCY,
     STATE_QTY,
@@ -40,7 +45,7 @@ Path(config.DOWNLOAD_DIR).mkdir(parents=True, exist_ok=True)
     STATE_PAYMENT,
     STATE_NOTES,
     STATE_CONFIRM,
-) = range(11)
+) = range(12)
 
 # Callback data prefixes
 CB_SAVE = "save"
@@ -51,6 +56,7 @@ CB_SHORT_FORM = "short_form"
 CB_FULL_FORM = "full_form"
 CB_SKIP = "skip"
 CB_NEW_SUPPLIER = "new_supplier"
+CB_DATE_TODAY = "date_today"
 
 
 def _get_confirm_keyboard() -> InlineKeyboardMarkup:
@@ -83,6 +89,14 @@ def _get_no_caption_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("📋 Полная форма", callback_data=CB_FULL_FORM),
         ],
         [InlineKeyboardButton("❌ Отмена", callback_data=CB_CANCEL)],
+    ])
+
+
+def _get_date_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура выбора даты."""
+    today = date.today().strftime("%d.%m.%Y")
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"📅 Сегодня ({today})", callback_data=CB_DATE_TODAY)],
     ])
 
 
@@ -124,12 +138,12 @@ def _get_supplier_keyboard() -> InlineKeyboardMarkup:
 
 
 def _get_category_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура выбора категории."""
+    """Клавиатура выбора категории (все категории)."""
     try:
         categories = db.get_categories()
         buttons = []
         row = []
-        for c in categories[:12]:
+        for c in categories:
             row.append(InlineKeyboardButton(c["name"], callback_data=f"cat_{c['id']}"))
             if len(row) == 3:
                 buttons.append(row)
@@ -143,12 +157,12 @@ def _get_category_keyboard() -> InlineKeyboardMarkup:
 
 
 def _get_project_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура выбора проекта (vessel)."""
+    """Клавиатура выбора проекта/судна (все проекты)."""
     try:
         projects = db.get_projects()
         buttons = []
         row = []
-        for p in projects[:12]:
+        for p in projects:
             row.append(InlineKeyboardButton(p["name"], callback_data=f"proj_{p['id']}"))
             if len(row) == 3:
                 buttons.append(row)
@@ -180,6 +194,16 @@ def _get_payment_keyboard() -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup([[InlineKeyboardButton("⏭ Пропустить", callback_data=CB_SKIP)]])
 
 
+@dataclass
+class SaveResult:
+    """Результат сохранения в БД и Sheets."""
+    document_id: int | None = None
+    entry_id: int | None = None
+    sheets_synced: bool = False
+    db_error: str | None = None
+    sheets_error: str | None = None
+
+
 async def _save_to_db_and_sheets(
     context: ContextTypes.DEFAULT_TYPE,
     parsed: ParsedData,
@@ -190,19 +214,20 @@ async def _save_to_db_and_sheets(
     telegram_chat_id: int | None = None,
     original_filename: str | None = None,
     parse_status: str = "parsed",
-) -> tuple[int | None, int | None]:
+) -> SaveResult:
     """
-    Сохранить в PostgreSQL и Google Sheets.
-    Возвращает (document_id, entry_id).
-    """
-    document_id = None
-    entry_id = None
+    Сохранить в PostgreSQL (primary) и Google Sheets (sync).
     
-    # 1. Сохранить в PostgreSQL (если DATABASE_URL настроен)
+    Returns:
+        SaveResult с document_id, entry_id, статусом синхронизации и ошибками.
+    """
+    result = SaveResult()
+    
+    # 1. Сохранить в PostgreSQL (PRIMARY storage)
     if config.DATABASE_URL:
         try:
             # Вставляем документ
-            document_id = db.insert_document(
+            result.document_id = db.insert_document(
                 telegram_file_id=telegram_file_id,
                 telegram_message_id=telegram_message_id,
                 telegram_chat_id=telegram_chat_id,
@@ -235,18 +260,20 @@ async def _save_to_db_and_sheets(
                 project_id=project_id,
                 payment_method_id=payment_method_id,
                 notes=parsed.notes,
-                document_id=document_id,
+                document_id=result.document_id,
                 parse_source=parsed.parse_source,
                 parse_status=parse_status,
                 parse_confidence=parsed.confidence,
             )
-            entry_id = db.insert_expense_entry(entry_data)
-            logger.info(f"Saved to PostgreSQL: document_id={document_id}, entry_id={entry_id}")
+            result.entry_id = db.insert_expense_entry(entry_data)
+            logger.info(f"Saved to PostgreSQL: document_id={result.document_id}, entry_id={result.entry_id}")
         except Exception as e:
             logger.error(f"Failed to save to PostgreSQL: {e}")
+            result.db_error = str(e)
+    else:
+        result.db_error = "DATABASE_URL not configured"
     
-    # 2. Сохранить в Google Sheets
-    sheets_error = None
+    # 2. Синхронизировать в Google Sheets (secondary/backup)
     try:
         append_purchase(
             token_json_path=config.TOKEN_JSON,
@@ -261,12 +288,13 @@ async def _save_to_db_and_sheets(
             category=context.user_data.get("category_name") or config.DEFAULT_CATEGORY,
             project=context.user_data.get("project_name") or config.DEFAULT_PROJECT,
         )
-        logger.info("Saved to Google Sheets")
+        result.sheets_synced = True
+        logger.info("Synced to Google Sheets")
     except Exception as e:
-        logger.error(f"Failed to save to Google Sheets: {e}")
-        sheets_error = str(e)
+        logger.error(f"Failed to sync to Google Sheets: {e}")
+        result.sheets_error = str(e)
     
-    return document_id, entry_id, sheets_error
+    return result
 
 
 async def _process_file(update: Update, context: ContextTypes.DEFAULT_TYPE, local_path: str, filename: str):
@@ -283,8 +311,11 @@ async def _process_file(update: Update, context: ContextTypes.DEFAULT_TYPE, loca
     context.user_data["telegram_message_id"] = message.message_id
     context.user_data["telegram_chat_id"] = message.chat.id
     
-    await message.reply_text("📥 Файл получен, загружаю в Drive...")
-    
+    status_msg = "📥 Файл получен, загружаю в Drive..."
+    if not DB_AVAILABLE:
+        status_msg += "\n⚠️ PostgreSQL недоступен — запись только в Google Sheets"
+    await message.reply_text(status_msg)
+
     # 1) Upload to Drive
     try:
         drive_url = upload_to_drive(
@@ -387,7 +418,7 @@ async def callback_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         parse_status = "parsed" if data == CB_SAVE else "draft"
         
-        document_id, entry_id, sheets_error = await _save_to_db_and_sheets(
+        save_result = await _save_to_db_and_sheets(
             context=context,
             parsed=parsed,
             drive_url=context.user_data.get("drive_url", ""),
@@ -411,11 +442,16 @@ async def callback_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             result_text += f"🏪 {parsed.supplier}\n"
         result_text += f"\n📎 {context.user_data.get('drive_url', '')}"
         
-        if entry_id:
-            result_text += f"\n🗃 DB entry: #{entry_id}"
+        if save_result.entry_id:
+            result_text += f"\n🗃 DB entry: #{save_result.entry_id}"
         
-        if sheets_error:
-            result_text += f"\n\n⚠️ Google Sheets error: {sheets_error}"
+        # Показываем статус синхронизации
+        if save_result.db_error:
+            result_text += f"\n\n⚠️ PostgreSQL: {save_result.db_error}"
+        if save_result.sheets_error:
+            result_text += f"\n⚠️ Sheets: {save_result.sheets_error}"
+        elif save_result.sheets_synced:
+            result_text += "\n✓ Sheets synced"
         
         await query.edit_message_text(result_text)
         context.user_data.clear()
@@ -436,9 +472,61 @@ async def callback_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def state_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Получение описания."""
     text = update.message.text.strip()
-    
+
     parsed = context.user_data.get("parsed") or ParsedData()
     parsed.description = text
+    context.user_data["parsed"] = parsed
+
+    await update.message.reply_text(
+        "📅 Введите дату (ДД.ММ.ГГГГ) или выберите:",
+        reply_markup=_get_date_keyboard()
+    )
+    return STATE_DATE
+
+
+async def callback_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбор даты (сегодня)."""
+    query = update.callback_query
+    await query.answer()
+    
+    parsed = context.user_data.get("parsed") or ParsedData()
+    parsed.expense_date = date.today()
+    context.user_data["parsed"] = parsed
+    
+    await query.edit_message_text("💰 Введите цену (например: 150 или 150.50):")
+    return STATE_PRICE
+
+
+async def state_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ввод даты вручную."""
+    text = update.message.text.strip()
+    
+    parsed = context.user_data.get("parsed") or ParsedData()
+    
+    # Парсим дату в разных форматах
+    for fmt in ["%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d", "%d.%m.%y", "%d/%m/%y"]:
+        try:
+            parsed.expense_date = date.fromisoformat(text) if fmt == "%Y-%m-%d" else \
+                                  date(*(int(x) for x in (text.replace("/", ".").split(".")[::-1] if "." in text or "/" in text else [text[:4], text[4:6], text[6:]])))
+        except Exception:
+            pass
+    
+    # Простой парсинг
+    import re
+    match = re.match(r"(\d{1,2})[./](\d{1,2})[./](\d{2,4})", text)
+    if match:
+        d, m, y = int(match.group(1)), int(match.group(2)), int(match.group(3))
+        if y < 100:
+            y += 2000
+        try:
+            parsed.expense_date = date(y, m, d)
+        except ValueError:
+            pass
+    
+    if not parsed.expense_date:
+        parsed.expense_date = date.today()
+        await update.message.reply_text(f"⚠️ Не распознал дату, использую сегодня: {parsed.expense_date.strftime('%d.%m.%Y')}")
+    
     context.user_data["parsed"] = parsed
     
     await update.message.reply_text("💰 Введите цену (например: 150 или 150.50):")
@@ -691,6 +779,10 @@ def main():
             STATE_DESCRIPTION: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, state_description),
             ],
+            STATE_DATE: [
+                CallbackQueryHandler(callback_date, pattern=r"^date_today$"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, state_date),
+            ],
             STATE_PRICE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, state_price),
             ],
@@ -728,15 +820,21 @@ def main():
     app.add_handler(conv_handler)
     
     # Проверка подключения к БД
+    global DB_AVAILABLE
     if config.DATABASE_URL:
         if db.test_connection():
-            logger.info("PostgreSQL connection OK")
+            DB_AVAILABLE = True
+            logger.info("✅ PostgreSQL connection OK")
         else:
-            logger.warning("PostgreSQL connection FAILED - will use Google Sheets only")
+            DB_AVAILABLE = False
+            logger.warning("⚠️ PostgreSQL connection FAILED - records will only go to Google Sheets!")
     else:
-        logger.info("DATABASE_URL not set - using Google Sheets only")
+        DB_AVAILABLE = False
+        logger.warning("⚠️ DATABASE_URL not set - records will only go to Google Sheets!")
     
     print("Bear Supply bot started (v2 with smart parser)")
+    if not DB_AVAILABLE:
+        print("⚠️ WARNING: PostgreSQL unavailable - using Google Sheets only!")
     app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 
 
