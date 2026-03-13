@@ -35,7 +35,8 @@ def upload_to_drive(
         created = service.files().create(
             body=metadata,
             media_body=media,
-            fields="id, webViewLink"
+            fields="id, webViewLink",
+            supportsAllDrives=True,  # Required for shared folders and Shared Drives
         ).execute()
     except HttpError as e:
         raise RuntimeError(f"Drive upload failed: {e}") from e
