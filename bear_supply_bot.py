@@ -238,6 +238,7 @@ async def _save_to_db_and_sheets(
             logger.error(f"Failed to save to PostgreSQL: {e}")
     
     # 2. Сохранить в Google Sheets
+    sheets_error = None
     try:
         append_purchase(
             token_json_path=config.TOKEN_JSON,
@@ -255,8 +256,9 @@ async def _save_to_db_and_sheets(
         logger.info("Saved to Google Sheets")
     except Exception as e:
         logger.error(f"Failed to save to Google Sheets: {e}")
+        sheets_error = str(e)
     
-    return document_id, entry_id
+    return document_id, entry_id, sheets_error
 
 
 async def _process_file(update: Update, context: ContextTypes.DEFAULT_TYPE, local_path: str, filename: str):
@@ -377,7 +379,7 @@ async def callback_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         parse_status = "parsed" if data == CB_SAVE else "draft"
         
-        document_id, entry_id = await _save_to_db_and_sheets(
+        document_id, entry_id, sheets_error = await _save_to_db_and_sheets(
             context=context,
             parsed=parsed,
             drive_url=context.user_data.get("drive_url", ""),
@@ -403,6 +405,9 @@ async def callback_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if entry_id:
             result_text += f"\n🗃 DB entry: #{entry_id}"
+        
+        if sheets_error:
+            result_text += f"\n\n⚠️ Google Sheets error: {sheets_error}"
         
         await query.edit_message_text(result_text)
         context.user_data.clear()
