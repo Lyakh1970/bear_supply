@@ -34,12 +34,13 @@ Path(config.DOWNLOAD_DIR).mkdir(parents=True, exist_ok=True)
     STATE_CURRENCY,
     STATE_QTY,
     STATE_SUPPLIER,
+    STATE_NEW_SUPPLIER,
     STATE_CATEGORY,
     STATE_PROJECT,
     STATE_PAYMENT,
     STATE_NOTES,
     STATE_CONFIRM,
-) = range(10)
+) = range(11)
 
 # Callback data prefixes
 CB_SAVE = "save"
@@ -49,6 +50,7 @@ CB_CANCEL = "cancel"
 CB_SHORT_FORM = "short_form"
 CB_FULL_FORM = "full_form"
 CB_SKIP = "skip"
+CB_NEW_SUPPLIER = "new_supplier"
 
 
 def _get_confirm_keyboard() -> InlineKeyboardMarkup:
@@ -102,17 +104,23 @@ def _get_supplier_keyboard() -> InlineKeyboardMarkup:
         suppliers = db.get_suppliers()
         buttons = []
         row = []
-        for s in suppliers[:12]:
+        for s in suppliers[:15]:
             row.append(InlineKeyboardButton(s["name"], callback_data=f"sup_{s['id']}"))
             if len(row) == 3:
                 buttons.append(row)
                 row = []
         if row:
             buttons.append(row)
-        buttons.append([InlineKeyboardButton("⏭ Пропустить", callback_data=CB_SKIP)])
+        buttons.append([
+            InlineKeyboardButton("➕ Новый поставщик", callback_data=CB_NEW_SUPPLIER),
+            InlineKeyboardButton("⏭ Пропустить", callback_data=CB_SKIP),
+        ])
         return InlineKeyboardMarkup(buttons)
     except Exception:
-        return InlineKeyboardMarkup([[InlineKeyboardButton("⏭ Пропустить", callback_data=CB_SKIP)]])
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("➕ Новый поставщик", callback_data=CB_NEW_SUPPLIER)],
+            [InlineKeyboardButton("⏭ Пропустить", callback_data=CB_SKIP)],
+        ])
 
 
 def _get_category_keyboard() -> InlineKeyboardMarkup:
@@ -506,6 +514,9 @@ async def callback_supplier(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if data == CB_SKIP:
         pass
+    elif data == CB_NEW_SUPPLIER:
+        await query.edit_message_text("🏪 Введите название нового поставщика:")
+        return STATE_NEW_SUPPLIER
     elif data.startswith("sup_"):
         supplier_id = int(data.replace("sup_", ""))
         context.user_data["supplier_id"] = supplier_id
@@ -532,6 +543,47 @@ async def callback_supplier(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Полная форма — категория
     await query.edit_message_text("📁 Выберите категорию:", reply_markup=_get_category_keyboard())
+    return STATE_CATEGORY
+
+
+async def state_new_supplier(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ввод нового поставщика."""
+    text = update.message.text.strip()
+    
+    if not text:
+        await update.message.reply_text("❌ Название не может быть пустым. Введите название поставщика:")
+        return STATE_NEW_SUPPLIER
+    
+    # Создаём нового поставщика в БД
+    try:
+        supplier_id = db.create_supplier_if_not_exists(text)
+        context.user_data["supplier_id"] = supplier_id
+        
+        parsed = context.user_data.get("parsed") or ParsedData()
+        parsed.supplier = text
+        context.user_data["parsed"] = parsed
+        
+        await update.message.reply_text(f"✅ Поставщик '{text}' добавлен!")
+    except Exception as e:
+        logger.error(f"Failed to create supplier: {e}")
+        parsed = context.user_data.get("parsed") or ParsedData()
+        parsed.supplier = text
+        parsed.supplier_raw = text
+        context.user_data["parsed"] = parsed
+        await update.message.reply_text(f"⚠️ Не удалось сохранить в БД, но продолжаем: {text}")
+    
+    # Если короткая форма — подтверждение
+    if not context.user_data.get("full_form"):
+        parsed = context.user_data.get("parsed") or ParsedData()
+        preview = format_preview(parsed)
+        await update.message.reply_text(
+            f"📋 Проверьте данные:\n\n{preview}",
+            reply_markup=_get_confirm_keyboard()
+        )
+        return STATE_CONFIRM
+    
+    # Полная форма — категория
+    await update.message.reply_text("📁 Выберите категорию:", reply_markup=_get_category_keyboard())
     return STATE_CATEGORY
 
 
@@ -648,9 +700,12 @@ def main():
             STATE_QTY: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, state_qty),
             ],
-            STATE_SUPPLIER: [
-                CallbackQueryHandler(callback_supplier, pattern=r"^(sup_|skip)"),
-            ],
+        STATE_SUPPLIER: [
+            CallbackQueryHandler(callback_supplier, pattern=r"^(sup_|skip|new_supplier)"),
+        ],
+        STATE_NEW_SUPPLIER: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, state_new_supplier),
+        ],
             STATE_CATEGORY: [
                 CallbackQueryHandler(callback_category, pattern=r"^(cat_|skip)"),
             ],
