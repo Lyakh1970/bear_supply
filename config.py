@@ -19,11 +19,8 @@ GROUP_ID = int(_get_env("BEAR_SUPPLY_GROUP_ID", "-5118688028"))
 
 DOWNLOAD_DIR = _get_env("BEAR_SUPPLY_DOWNLOAD_DIR", "/opt/bear_supply/uploads")
 
-# Google Service Account (вместо OAuth token.json)
-GOOGLE_SERVICE_ACCOUNT_FILE = _get_env(
-    "GOOGLE_SERVICE_ACCOUNT_FILE",
-    "/opt/bear_supply/creds/service-account.json"
-)
+# Google OAuth token.json (created by auth_drive.py, auto-refreshes)
+TOKEN_JSON = _get_env("BEAR_SUPPLY_TOKEN_JSON", "/opt/bear_supply/creds/token.json")
 
 SHEET_ID = _get_env("BEAR_SUPPLY_SHEET_ID")
 if not SHEET_ID:

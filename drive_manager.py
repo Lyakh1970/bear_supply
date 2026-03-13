@@ -10,14 +10,14 @@ logger = logging.getLogger(__name__)
 
 
 def upload_to_drive(
-    service_account_file: str,
+    token_json_path: str,
     local_path: str,
     filename: str,
     folder_id: str | None = None
 ) -> str:
     logger.info(f"upload_to_drive: filename={filename}, folder_id={folder_id}")
     
-    creds = load_credentials(service_account_file)
+    creds = load_credentials(token_json_path)
     service = build("drive", "v3", credentials=creds)
 
     metadata: dict = {"name": filename}
