@@ -276,7 +276,7 @@ async def _save_to_db_and_sheets(
     # 2. Синхронизировать в Google Sheets (secondary/backup)
     try:
         append_purchase(
-            token_json_path=config.TOKEN_JSON,
+            service_account_file=config.GOOGLE_SERVICE_ACCOUNT_FILE,
             sheet_id=config.SHEET_ID,
             worksheet_name=config.WORKSHEET_NAME,
             supplier=parsed.supplier or "",
@@ -319,7 +319,7 @@ async def _process_file(update: Update, context: ContextTypes.DEFAULT_TYPE, loca
     # 1) Upload to Drive
     try:
         drive_url = upload_to_drive(
-            token_json_path=config.TOKEN_JSON,
+            service_account_file=config.GOOGLE_SERVICE_ACCOUNT_FILE,
             local_path=local_path,
             filename=filename,
             folder_id=(config.DRIVE_FOLDER_ID or None)

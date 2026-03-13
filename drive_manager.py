@@ -5,12 +5,12 @@ from googleapiclient.errors import HttpError
 from google_auth import load_credentials
 
 def upload_to_drive(
-    token_json_path: str,
+    service_account_file: str,
     local_path: str,
     filename: str,
     folder_id: str | None = None
 ) -> str:
-    creds = load_credentials(token_json_path)
+    creds = load_credentials(service_account_file)
     service = build("drive", "v3", credentials=creds)
 
     metadata: dict = {"name": filename}

@@ -30,7 +30,7 @@ def _build_header_map(headers: list[str]) -> dict[str, int]:
     return idx_map
 
 def append_purchase(
-    token_json_path: str,
+    service_account_file: str,
     sheet_id: str,
     worksheet_name: str,
     supplier: str,
@@ -42,7 +42,7 @@ def append_purchase(
     category: str | None = None,
     project: str | None = None,
 ):
-    creds = load_credentials(token_json_path)
+    creds = load_credentials(service_account_file)
     client = gspread.authorize(creds)
 
     ws = client.open_by_key(sheet_id).worksheet(worksheet_name)
