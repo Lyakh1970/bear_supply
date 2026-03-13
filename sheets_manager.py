@@ -11,6 +11,8 @@ HEADER_ALIASES = {
     "qty": {"qty", "quantity", "кол-во", "количество"},
     "unit_price": {"unit price", "unit_price", "price", "цена", "unitprice"},
     "currency": {"currency", "валюта"},
+    "category": {"category", "категория"},
+    "project": {"project", "проект"},
     "document_link": {"document_link", "document link", "link", "ссылка", "doc_link"},
 }
 
@@ -36,7 +38,9 @@ def append_purchase(
     qty: float,
     unit_price: float,
     currency: str,
-    document_link: str
+    document_link: str,
+    category: str | None = None,
+    project: str | None = None,
 ):
     creds = load_credentials(token_json_path)
     client = gspread.authorize(creds)
@@ -67,5 +71,9 @@ def append_purchase(
     row[hm["unit_price"]] = unit_price
     row[hm["currency"]] = currency
     row[hm["document_link"]] = document_link
+    if "category" in hm and category:
+        row[hm["category"]] = category
+    if "project" in hm and project:
+        row[hm["project"]] = project
 
     ws.append_row(row, value_input_option="USER_ENTERED")
