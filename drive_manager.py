@@ -1,8 +1,13 @@
+import logging
+
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from googleapiclient.errors import HttpError
 
 from google_auth import load_credentials
+
+logger = logging.getLogger(__name__)
+
 
 def upload_to_drive(
     service_account_file: str,
@@ -10,15 +15,21 @@ def upload_to_drive(
     filename: str,
     folder_id: str | None = None
 ) -> str:
+    logger.info(f"upload_to_drive: filename={filename}, folder_id={folder_id}")
+    
     creds = load_credentials(service_account_file)
     service = build("drive", "v3", credentials=creds)
 
     metadata: dict = {"name": filename}
-    # IMPORTANT: folder_id optional. If empty -> upload to Drive root (no parents) => no 404.
+    # IMPORTANT: folder_id MUST be set for Service Account (no own storage quota)
     if folder_id:
         metadata["parents"] = [folder_id]
+        logger.info(f"Will upload to folder: {folder_id}")
+    else:
+        logger.warning("No folder_id specified! Service Account has no storage quota.")
 
     media = MediaFileUpload(local_path, resumable=True)
+    logger.info(f"Uploading file with metadata: {metadata}")
 
     try:
         created = service.files().create(
