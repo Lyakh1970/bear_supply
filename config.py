@@ -1,3 +1,4 @@
+import json
 import os
 
 def _get_env(name: str, default: str | None = None) -> str | None:
@@ -10,6 +11,9 @@ def _get_env(name: str, default: str | None = None) -> str | None:
 TELEGRAM_TOKEN = _get_env("BEAR_SUPPLY_TOKEN") or _get_env("TELEGRAM_BOT_TOKEN")
 if not TELEGRAM_TOKEN:
     raise RuntimeError("Env BEAR_SUPPLY_TOKEN or TELEGRAM_BOT_TOKEN is not set")
+
+# PostgreSQL (Digital Ocean Managed Database)
+DATABASE_URL = _get_env("DATABASE_URL")
 
 GROUP_ID = int(_get_env("BEAR_SUPPLY_GROUP_ID", "-5118688028"))
 
@@ -24,3 +28,20 @@ WORKSHEET_NAME = _get_env("BEAR_SUPPLY_WORKSHEET_NAME", "Purchases_Log")
 
 # Optional: if empty/None -> upload to Drive root
 DRIVE_FOLDER_ID = _get_env("BEAR_SUPPLY_DRIVE_FOLDER_ID", "")
+
+# Маппинг "как в подписи" → "ключ из листа Suppliers" (чтобы в таблице работал поиск Platform).
+# Пример: BEAR_SUPPLY_SUPPLIER_ALIASES='{"Amazon":"amazon.pl","Amazon ES":"amazon.es"}'
+def _parse_supplier_aliases() -> dict[str, str] | None:
+    raw = _get_env("BEAR_SUPPLY_SUPPLIER_ALIASES")
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+
+SUPPLIER_ALIASES = _parse_supplier_aliases()
+
+# Значения по умолчанию для Category и Project (если не указаны в подписи) — для Report_Key
+DEFAULT_CATEGORY = _get_env("BEAR_SUPPLY_DEFAULT_CATEGORY")
+DEFAULT_PROJECT = _get_env("BEAR_SUPPLY_DEFAULT_PROJECT")
