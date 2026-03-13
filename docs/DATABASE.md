@@ -366,6 +366,22 @@ CREATE TABLE IF NOT EXISTS expense_entries (
 
 ---
 
+## Миграции (TODO)
+
+### Добавить поле sheets_synced
+
+Для отслеживания синхронизации с Google Sheets:
+
+```sql
+ALTER TABLE expense_entries 
+ADD COLUMN sheets_synced BOOLEAN DEFAULT FALSE;
+
+ALTER TABLE expense_entries 
+ADD COLUMN sheets_synced_at TIMESTAMPTZ;
+```
+
+---
+
 ## Подключение
 
 ```bash
