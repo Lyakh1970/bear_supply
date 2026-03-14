@@ -7,28 +7,42 @@ def _get_env(name: str, default: str | None = None) -> str | None:
         return None
     return val
 
-# Токен бота: BEAR_SUPPLY_TOKEN или TELEGRAM_BOT_TOKEN (для совместимости с .env)
+# ─────────────────────────────────────────────────────────────────────────────
+# Telegram
+# ─────────────────────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN = _get_env("BEAR_SUPPLY_TOKEN") or _get_env("TELEGRAM_BOT_TOKEN")
 if not TELEGRAM_TOKEN:
     raise RuntimeError("Env BEAR_SUPPLY_TOKEN or TELEGRAM_BOT_TOKEN is not set")
-
-# PostgreSQL (Digital Ocean Managed Database)
-DATABASE_URL = _get_env("DATABASE_URL")
 
 GROUP_ID = int(_get_env("BEAR_SUPPLY_GROUP_ID", "-5118688028"))
 
 DOWNLOAD_DIR = _get_env("BEAR_SUPPLY_DOWNLOAD_DIR", "/opt/bear_supply/uploads")
 
-# Google OAuth token.json (created by auth_drive.py, auto-refreshes)
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL (Digital Ocean Managed Database) - PRIMARY STORAGE
+# ─────────────────────────────────────────────────────────────────────────────
+DATABASE_URL = _get_env("DATABASE_URL")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Nextcloud - FILE STORAGE
+# ─────────────────────────────────────────────────────────────────────────────
+NEXTCLOUD_BASE_URL = _get_env("NEXTCLOUD_BASE_URL")  # e.g. https://cloud.bearcloud.one
+NEXTCLOUD_USERNAME = _get_env("NEXTCLOUD_USERNAME")  # e.g. bearbot
+NEXTCLOUD_PASSWORD = _get_env("NEXTCLOUD_PASSWORD")  # App password (not regular password!)
+NEXTCLOUD_BASE_FOLDER = _get_env("NEXTCLOUD_BASE_FOLDER", "Documents/BearBox Docs/Finance")
+NEXTCLOUD_SHARE_PASSWORD = _get_env("NEXTCLOUD_SHARE_PASSWORD", "BearBox2026!")  # Password for public links
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Google Sheets via Apps Script Web App - UI LAYER
+# ─────────────────────────────────────────────────────────────────────────────
+SHEETS_WEBAPP_URL = _get_env("SHEETS_WEBAPP_URL")  # Google Apps Script deployment URL
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LEGACY: Google OAuth (deprecated, kept for reference)
+# ─────────────────────────────────────────────────────────────────────────────
 TOKEN_JSON = _get_env("BEAR_SUPPLY_TOKEN_JSON", "/opt/bear_supply/creds/token.json")
-
 SHEET_ID = _get_env("BEAR_SUPPLY_SHEET_ID")
-if not SHEET_ID:
-    raise RuntimeError("Env BEAR_SUPPLY_SHEET_ID is not set (use Google Sheet ID from URL)")
-
 WORKSHEET_NAME = _get_env("BEAR_SUPPLY_WORKSHEET_NAME", "Purchases_Log")
-
-# Optional: if empty/None -> upload to Drive root
 DRIVE_FOLDER_ID = _get_env("BEAR_SUPPLY_DRIVE_FOLDER_ID", "")
 
 # Маппинг "как в подписи" → "ключ из листа Suppliers" (чтобы в таблице работал поиск Platform).

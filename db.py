@@ -126,7 +126,7 @@ def find_payment_method_by_name(name: str) -> Optional[dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Вставка документа
+# Вставка и обновление документов
 # ─────────────────────────────────────────────────────────────────────────────
 
 def insert_document(
@@ -136,11 +136,29 @@ def insert_document(
     original_filename: Optional[str] = None,
     mime_type: Optional[str] = None,
     file_size_bytes: Optional[int] = None,
-    drive_url: Optional[str] = None,
     caption_raw: Optional[str] = None,
     ocr_text_raw: Optional[str] = None,
+    # New storage fields
+    storage_backend: Optional[str] = None,
+    storage_path: Optional[str] = None,
+    public_url: Optional[str] = None,
+    share_password: Optional[str] = None,
+    upload_status: str = "pending",
+    upload_error: Optional[str] = None,
+    # Legacy field (deprecated)
+    drive_url: Optional[str] = None,
 ) -> int:
-    """Вставить запись о документе, вернуть document_id."""
+    """
+    Вставить запись о документе, вернуть document_id.
+    
+    New fields:
+        storage_backend: 'nextcloud' | 'gdrive' (legacy)
+        storage_path: internal path in storage
+        public_url: public link to document
+        share_password: password for public link (if enforced by server policy)
+        upload_status: 'pending' | 'uploaded' | 'failed'
+        upload_error: error message if failed
+    """
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -151,10 +169,16 @@ def insert_document(
                     original_filename,
                     mime_type,
                     file_size_bytes,
-                    drive_url,
                     caption_raw,
-                    ocr_text_raw
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ocr_text_raw,
+                    storage_backend,
+                    storage_path,
+                    public_url,
+                    share_password,
+                    upload_status,
+                    upload_error,
+                    drive_url
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
             """, (
                 telegram_file_id,
@@ -163,11 +187,50 @@ def insert_document(
                 original_filename,
                 mime_type,
                 file_size_bytes,
-                drive_url,
                 caption_raw,
                 ocr_text_raw,
+                storage_backend,
+                storage_path,
+                public_url,
+                share_password,
+                upload_status,
+                upload_error,
+                drive_url,
             ))
             return cur.fetchone()[0]
+
+
+def update_document_upload_status(
+    document_id: int,
+    storage_backend: str,
+    storage_path: Optional[str] = None,
+    public_url: Optional[str] = None,
+    upload_status: str = "uploaded",
+    upload_error: Optional[str] = None,
+) -> None:
+    """
+    Обновить статус загрузки документа после upload в storage.
+    
+    Вызывается после успешной/неуспешной загрузки в Nextcloud.
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE documents SET
+                    storage_backend = %s,
+                    storage_path = %s,
+                    public_url = %s,
+                    upload_status = %s,
+                    upload_error = %s
+                WHERE id = %s
+            """, (
+                storage_backend,
+                storage_path,
+                public_url,
+                upload_status,
+                upload_error,
+                document_id,
+            ))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

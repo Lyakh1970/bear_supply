@@ -57,11 +57,12 @@
 ┌─────────────────────────────────────────┐
 │              documents                   │
 │─────────────────────────────────────────│
-│ id (PK)           │ drive_url           │
-│ telegram_file_id  │ caption_raw         │
-│ telegram_msg_id   │ ocr_text_raw        │
-│ original_filename │ uploaded_at         │
-│ mime_type         │                     │
+│ id (PK)           │ storage_backend     │
+│ telegram_file_id  │ storage_path        │
+│ telegram_msg_id   │ public_url          │
+│ original_filename │ upload_status       │
+│ mime_type         │ upload_error        │
+│ caption_raw       │ drive_url (legacy)  │
 └─────────────────────────────────────────┘
 ```
 
@@ -193,10 +194,18 @@ INSERT INTO currencies (code, name) VALUES
 | `original_filename` | text | NULL | — | Исходное имя файла |
 | `mime_type` | text | NULL | — | MIME-тип (image/jpeg, application/pdf) |
 | `file_size_bytes` | bigint | NULL | — | Размер файла в байтах |
-| `drive_url` | text | NULL | — | Ссылка на файл в Google Drive |
 | `caption_raw` | text | NULL | — | Исходный текст подписи из Telegram |
 | `ocr_text_raw` | text | NULL | — | Распознанный текст (OCR) |
 | `uploaded_at` | timestamptz | NOT NULL | now() | Дата загрузки |
+| **Новые поля (v3):** | | | | |
+| `storage_backend` | text | NULL | — | Backend хранилища: 'nextcloud', 'gdrive' |
+| `storage_path` | text | NULL | — | Внутренний путь в storage |
+| `public_url` | text | NULL | — | Публичная ссылка на файл |
+| `share_password` | text | NULL | — | Пароль для public link (если требуется) |
+| `upload_status` | text | NULL | 'pending' | Статус: 'pending', 'uploaded', 'failed' |
+| `upload_error` | text | NULL | — | Текст ошибки загрузки |
+| **Legacy:** | | | | |
+| `drive_url` | text | NULL | — | [DEPRECATED] Ссылка на файл в Google Drive |
 
 ---
 
@@ -244,9 +253,16 @@ CREATE TABLE IF NOT EXISTS documents (
     original_filename TEXT,
     mime_type TEXT,
     file_size_bytes BIGINT,
-    drive_url TEXT,
     caption_raw TEXT,
     ocr_text_raw TEXT,
+    -- Storage fields (v3)
+    storage_backend TEXT,           -- 'nextcloud' or 'gdrive' (legacy)
+    storage_path TEXT,              -- internal path in storage
+    public_url TEXT,                -- public URL to the file
+    upload_status TEXT DEFAULT 'pending',  -- 'pending', 'uploaded', 'failed'
+    upload_error TEXT,              -- error message if failed
+    -- Legacy (deprecated)
+    drive_url TEXT,                 -- Google Drive URL (deprecated, use public_url)
     uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -366,18 +382,42 @@ CREATE TABLE IF NOT EXISTS expense_entries (
 
 ---
 
-## Миграции (TODO)
+## Миграции
 
-### Добавить поле sheets_synced
+### [v3] Добавить поля storage для documents
+
+Миграция для поддержки Nextcloud вместо Google Drive:
+
+```sql
+-- Добавить новые поля storage
+ALTER TABLE documents
+ADD COLUMN IF NOT EXISTS storage_backend TEXT,
+ADD COLUMN IF NOT EXISTS storage_path TEXT,
+ADD COLUMN IF NOT EXISTS public_url TEXT,
+ADD COLUMN IF NOT EXISTS share_password TEXT,
+ADD COLUMN IF NOT EXISTS upload_status TEXT DEFAULT 'pending',
+ADD COLUMN IF NOT EXISTS upload_error TEXT;
+
+-- Комментарии
+COMMENT ON COLUMN documents.storage_backend IS 'Storage backend: nextcloud, gdrive (legacy)';
+COMMENT ON COLUMN documents.storage_path IS 'Internal path in storage system';
+COMMENT ON COLUMN documents.public_url IS 'Public URL to access the file';
+COMMENT ON COLUMN documents.share_password IS 'Password for public link (if enforced by server policy)';
+COMMENT ON COLUMN documents.upload_status IS 'Upload status: pending, uploaded, failed';
+COMMENT ON COLUMN documents.upload_error IS 'Error message if upload failed';
+COMMENT ON COLUMN documents.drive_url IS 'DEPRECATED: Use public_url instead';
+```
+
+### [TODO] Добавить поле sheets_synced
 
 Для отслеживания синхронизации с Google Sheets:
 
 ```sql
 ALTER TABLE expense_entries 
-ADD COLUMN sheets_synced BOOLEAN DEFAULT FALSE;
+ADD COLUMN IF NOT EXISTS sheets_synced BOOLEAN DEFAULT FALSE;
 
 ALTER TABLE expense_entries 
-ADD COLUMN sheets_synced_at TIMESTAMPTZ;
+ADD COLUMN IF NOT EXISTS sheets_synced_at TIMESTAMPTZ;
 ```
 
 ---

@@ -16,8 +16,8 @@ from telegram.ext import (
 
 import config
 from smart_parser import parse_caption, is_parse_sufficient, format_preview, ParsedData
-from drive_manager import upload_to_drive
-from sheets_manager import append_purchase
+from nextcloud_storage import upload_file_to_nextcloud, UploadResult
+from sheets_webapp import append_row_to_sheet, ExpenseRowData
 import db
 
 logging.basicConfig(
@@ -199,15 +199,17 @@ class SaveResult:
     """Результат сохранения в БД и Sheets."""
     document_id: int | None = None
     entry_id: int | None = None
+    storage_url: str | None = None  # Public URL from Nextcloud
     sheets_synced: bool = False
     db_error: str | None = None
+    storage_error: str | None = None
     sheets_error: str | None = None
 
 
 async def _save_to_db_and_sheets(
     context: ContextTypes.DEFAULT_TYPE,
     parsed: ParsedData,
-    drive_url: str,
+    upload_result: UploadResult,
     caption_raw: str,
     telegram_file_id: str | None = None,
     telegram_message_id: int | None = None,
@@ -216,24 +218,35 @@ async def _save_to_db_and_sheets(
     parse_status: str = "parsed",
 ) -> SaveResult:
     """
-    Сохранить в PostgreSQL (primary) и Google Sheets (sync).
+    Сохранить в PostgreSQL (primary) и Google Sheets (UI sync).
     
+    Args:
+        upload_result: Результат загрузки в Nextcloud
+        
     Returns:
         SaveResult с document_id, entry_id, статусом синхронизации и ошибками.
     """
     result = SaveResult()
+    result.storage_url = upload_result.public_url
+    result.storage_error = upload_result.error if not upload_result.success else None
     
     # 1. Сохранить в PostgreSQL (PRIMARY storage)
     if config.DATABASE_URL:
         try:
-            # Вставляем документ
+            # Вставляем документ с новыми полями storage
             result.document_id = db.insert_document(
                 telegram_file_id=telegram_file_id,
                 telegram_message_id=telegram_message_id,
                 telegram_chat_id=telegram_chat_id,
                 original_filename=original_filename,
-                drive_url=drive_url,
                 caption_raw=caption_raw,
+                # New storage fields
+                storage_backend=upload_result.storage_backend,
+                storage_path=upload_result.storage_path,
+                public_url=upload_result.public_url,
+                share_password=upload_result.share_password,
+                upload_status="uploaded" if upload_result.success else "failed",
+                upload_error=upload_result.error,
             )
             
             # Находим ID из справочников
@@ -247,12 +260,17 @@ async def _save_to_db_and_sheets(
             project_id = context.user_data.get("project_id")
             payment_method_id = context.user_data.get("payment_method_id")
             
+            # Вычисляем total
+            unit_price = parsed.unit_price or 0
+            total = unit_price * parsed.qty
+            
             # Вставляем запись расхода
             entry_data = db.ExpenseEntryData(
                 expense_date=parsed.expense_date or date.today(),
                 description=parsed.description or "No description",
                 qty=parsed.qty,
                 unit_price=parsed.unit_price,
+                total=total,
                 currency_code=parsed.currency,
                 supplier_id=supplier_id,
                 supplier_name_raw=parsed.supplier_raw or parsed.supplier,
@@ -273,23 +291,33 @@ async def _save_to_db_and_sheets(
     else:
         result.db_error = "DATABASE_URL not configured"
     
-    # 2. Синхронизировать в Google Sheets (secondary/backup)
+    # 2. Синхронизировать в Google Sheets (UI layer via Apps Script)
     try:
-        append_purchase(
-            token_json_path=config.TOKEN_JSON,
-            sheet_id=config.SHEET_ID,
-            worksheet_name=config.WORKSHEET_NAME,
+        unit_price = parsed.unit_price or 0
+        total = unit_price * parsed.qty
+        
+        row_data = ExpenseRowData(
+            expense_date=parsed.expense_date or date.today(),
             supplier=parsed.supplier or "",
             description=parsed.description or "",
             qty=parsed.qty,
-            unit_price=parsed.unit_price or 0,
+            unit_price=unit_price,
+            total=total,
             currency=parsed.currency or "EUR",
-            document_link=drive_url,
             category=context.user_data.get("category_name") or config.DEFAULT_CATEGORY,
             project=context.user_data.get("project_name") or config.DEFAULT_PROJECT,
+            payment_method=context.user_data.get("payment_method_name"),
+            notes=parsed.notes,
+            document_url=upload_result.public_url,  # Nextcloud public URL
         )
-        result.sheets_synced = True
-        logger.info("Synced to Google Sheets")
+        
+        sheet_result = append_row_to_sheet(row_data)
+        result.sheets_synced = sheet_result.success
+        if not sheet_result.success:
+            result.sheets_error = sheet_result.error
+            logger.warning(f"Sheets sync failed: {sheet_result.error}")
+        else:
+            logger.info("Synced to Google Sheets via Apps Script")
     except Exception as e:
         logger.error(f"Failed to sync to Google Sheets: {e}")
         result.sheets_error = str(e)
@@ -311,28 +339,29 @@ async def _process_file(update: Update, context: ContextTypes.DEFAULT_TYPE, loca
     context.user_data["telegram_message_id"] = message.message_id
     context.user_data["telegram_chat_id"] = message.chat.id
     
-    status_msg = "📥 Файл получен, загружаю в Drive..."
+    status_msg = "📥 Файл получен, загружаю в Nextcloud..."
     if not DB_AVAILABLE:
-        status_msg += "\n⚠️ PostgreSQL недоступен — запись только в Google Sheets"
+        status_msg += "\n⚠️ PostgreSQL недоступен"
     await message.reply_text(status_msg)
 
-    # 1) Upload to Drive
-    try:
-        drive_url = upload_to_drive(
-            token_json_path=config.TOKEN_JSON,
-            local_path=local_path,
-            filename=filename,
-            folder_id=(config.DRIVE_FOLDER_ID or None)
-        )
-        context.user_data["drive_url"] = drive_url
-    except Exception as e:
-        await message.reply_text(f"❌ Ошибка загрузки в Drive: {e}")
-        return ConversationHandler.END
+    # 1) Upload to Nextcloud
+    upload_result = upload_file_to_nextcloud(
+        local_path=local_path,
+        original_filename=filename,
+    )
+    
+    context.user_data["upload_result"] = upload_result
+    
+    if not upload_result.success:
+        logger.warning(f"Nextcloud upload failed: {upload_result.error}")
+        # Не прерываем — продолжаем без файла, ошибка сохранится в БД
+    
+    file_url = upload_result.public_url or "(загрузка не удалась)"
     
     # 2) Если нет подписи — предложить диалог
     if not caption.strip():
         await message.reply_text(
-            f"📎 Файл загружен:\n{drive_url}\n\n"
+            f"📎 Файл: {file_url}\n\n"
             f"Подписи нет. Как оформить запись?",
             reply_markup=_get_no_caption_keyboard()
         )
@@ -350,14 +379,16 @@ async def _process_file(update: Update, context: ContextTypes.DEFAULT_TYPE, loca
     # 4) Показываем превью
     preview = format_preview(parsed)
     
+    storage_info = f"📎 {file_url}" if upload_result.success else f"⚠️ Файл не загружен: {upload_result.error}"
+    
     if is_parse_sufficient(parsed):
         await message.reply_text(
-            f"✅ Распознано:\n\n{preview}\n\n📎 {drive_url}",
+            f"✅ Распознано:\n\n{preview}\n\n{storage_info}",
             reply_markup=_get_confirm_keyboard()
         )
     else:
         await message.reply_text(
-            f"⚠️ Частично распознано:\n\n{preview}\n\n📎 {drive_url}",
+            f"⚠️ Частично распознано:\n\n{preview}\n\n{storage_info}",
             reply_markup=_get_partial_keyboard()
         )
     
@@ -427,12 +458,17 @@ async def callback_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not parsed:
             parsed = ParsedData(description="No description", expense_date=date.today())
         
+        # Получаем upload_result из context (или создаём пустой если нет)
+        upload_result = context.user_data.get("upload_result")
+        if not upload_result:
+            upload_result = UploadResult(success=False, error="No file uploaded")
+        
         parse_status = "parsed" if data == CB_SAVE else "draft"
         
         save_result = await _save_to_db_and_sheets(
             context=context,
             parsed=parsed,
-            drive_url=context.user_data.get("drive_url", ""),
+            upload_result=upload_result,
             caption_raw=context.user_data.get("caption_raw", ""),
             telegram_file_id=context.user_data.get("telegram_file_id"),
             telegram_message_id=context.user_data.get("telegram_message_id"),
@@ -451,7 +487,12 @@ async def callback_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             result_text += f"💰 {parsed.unit_price} {parsed.currency or ''}\n"
         if parsed.supplier:
             result_text += f"🏪 {parsed.supplier}\n"
-        result_text += f"\n📎 {context.user_data.get('drive_url', '')}"
+        
+        # Показываем ссылку на файл
+        if save_result.storage_url:
+            result_text += f"\n📎 {save_result.storage_url}"
+        elif save_result.storage_error:
+            result_text += f"\n⚠️ Файл: {save_result.storage_error}"
         
         if save_result.entry_id:
             result_text += f"\n🗃 DB entry: #{save_result.entry_id}"
@@ -838,14 +879,27 @@ def main():
             logger.info("✅ PostgreSQL connection OK")
         else:
             DB_AVAILABLE = False
-            logger.warning("⚠️ PostgreSQL connection FAILED - records will only go to Google Sheets!")
+            logger.warning("⚠️ PostgreSQL connection FAILED")
     else:
         DB_AVAILABLE = False
-        logger.warning("⚠️ DATABASE_URL not set - records will only go to Google Sheets!")
+        logger.warning("⚠️ DATABASE_URL not set")
     
-    print("Bear Supply bot started (v2 with smart parser)")
+    # Проверка Nextcloud
+    from nextcloud_storage import test_connection as test_nextcloud
+    if test_nextcloud():
+        logger.info("✅ Nextcloud connection OK")
+    else:
+        logger.warning("⚠️ Nextcloud not available - files won't be uploaded")
+    
+    # Проверка Sheets Web App
+    if config.SHEETS_WEBAPP_URL:
+        logger.info(f"✅ Sheets Web App configured: {config.SHEETS_WEBAPP_URL[:50]}...")
+    else:
+        logger.warning("⚠️ SHEETS_WEBAPP_URL not set - Sheets sync disabled")
+    
+    print("Bear Supply bot started (v3 - Nextcloud + Apps Script)")
     if not DB_AVAILABLE:
-        print("⚠️ WARNING: PostgreSQL unavailable - using Google Sheets only!")
+        print("⚠️ WARNING: PostgreSQL unavailable!")
     app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 
 
