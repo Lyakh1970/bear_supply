@@ -41,8 +41,8 @@ class ExpenseRowData:
     legal_entity: Optional[str] = None
     payment_method: Optional[str] = None
     invoice: Optional[str] = None
-     expense_type: Optional[str] = None
-     report_key: Optional[str] = None
+    expense_type: Optional[str] = None
+    report_key: Optional[str] = None
     notes: Optional[str] = None
     document_url: Optional[str] = None  # Ссылка на документ (Nextcloud public URL)
 
