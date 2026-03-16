@@ -44,9 +44,11 @@ DB_AVAILABLE = False
     STATE_PROJECT,
     STATE_LEGAL_ENTITY,
     STATE_PAYMENT,
+    STATE_INVOICE,
+    STATE_EXPENSE_TYPE,
     STATE_NOTES,
     STATE_CONFIRM,
-) = range(13)
+) = range(15)
 
 # Callback data prefixes
 CB_SAVE = "save"
@@ -58,6 +60,14 @@ CB_FULL_FORM = "full_form"
 CB_SKIP = "skip"
 CB_NEW_SUPPLIER = "new_supplier"
 CB_DATE_TODAY = "date_today"
+CB_INV_YES = "inv_yes"
+CB_INV_NO = "inv_no"
+CB_INV_PENDING = "inv_pending"
+CB_EXP_SUBSCRIPTION = "exp_subscription"
+CB_EXP_ONE_TIME = "exp_one_time"
+CB_EXP_TRAVEL = "exp_travel"
+CB_EXP_TOOLS = "exp_tools"
+CB_EXP_OTHER = "exp_other"
 
 
 def _get_confirm_keyboard() -> InlineKeyboardMarkup:
@@ -213,6 +223,31 @@ def _get_payment_keyboard() -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup([[InlineKeyboardButton("⏭ Пропустить", callback_data=CB_SKIP)]])
 
 
+def _get_invoice_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура выбора статуса счёта (invoice)."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Есть счёт", callback_data=CB_INV_YES),
+            InlineKeyboardButton("❌ Без счёта", callback_data=CB_INV_NO),
+        ],
+        [InlineKeyboardButton("🕒 Пока не знаю", callback_data=CB_INV_PENDING)],
+    ])
+
+
+def _get_expense_type_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура выбора типа расхода."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📄 Подписка", callback_data=CB_EXP_SUBSCRIPTION),
+            InlineKeyboardButton("🛒 Разовая покупка", callback_data=CB_EXP_ONE_TIME),
+        ],
+        [
+            InlineKeyboardButton("✈️ Travel", callback_data=CB_EXP_TRAVEL),
+            InlineKeyboardButton("🛠 Tools/Capex", callback_data=CB_EXP_TOOLS),
+        ],
+        [InlineKeyboardButton("🏷 Другое", callback_data=CB_EXP_OTHER)],
+    ])
+
 @dataclass
 class SaveResult:
     """Результат сохранения в БД и Sheets."""
@@ -284,6 +319,12 @@ async def _save_to_db_and_sheets(
             unit_price = parsed.unit_price or 0
             total = unit_price * parsed.qty
             
+            # Report_Key: YYYY-MM + LegalEntity + Project (если есть)
+            month_key = (parsed.expense_date or date.today()).strftime("%Y-%m")
+            le_name = context.user_data.get("legal_entity_name") or "NA"
+            project_name = context.user_data.get("project_name") or "NA"
+            report_key = f"{month_key}_{le_name}_{project_name}"
+            
             # Вставляем запись расхода
             entry_data = db.ExpenseEntryData(
                 expense_date=parsed.expense_date or date.today(),
@@ -298,6 +339,9 @@ async def _save_to_db_and_sheets(
                 project_id=project_id,
                 legal_entity_id=legal_entity_id,
                 payment_method_id=payment_method_id,
+                invoice=context.user_data.get("invoice_status"),
+                expense_type=context.user_data.get("expense_type"),
+                report_key=report_key,
                 notes=parsed.notes,
                 document_id=result.document_id,
                 parse_source=parsed.parse_source,
@@ -317,6 +361,11 @@ async def _save_to_db_and_sheets(
         unit_price = parsed.unit_price or 0
         total = unit_price * parsed.qty
         
+        month_key = (parsed.expense_date or date.today()).strftime("%Y-%m")
+        le_name = context.user_data.get("legal_entity_name") or "NA"
+        project_name = context.user_data.get("project_name") or "NA"
+        report_key = f"{month_key}_{le_name}_{project_name}"
+        
         row_data = ExpenseRowData(
             expense_date=parsed.expense_date or date.today(),
             supplier=parsed.supplier or "",
@@ -329,6 +378,9 @@ async def _save_to_db_and_sheets(
             project=context.user_data.get("project_name") or config.DEFAULT_PROJECT,
             legal_entity=context.user_data.get("legal_entity_name"),
             payment_method=context.user_data.get("payment_method_name"),
+            invoice=context.user_data.get("invoice_status"),
+            expense_type=context.user_data.get("expense_type"),
+            report_key=report_key,
             notes=parsed.notes,
             document_url=upload_result.public_url,  # Nextcloud public URL
         )
@@ -831,6 +883,53 @@ async def callback_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
     
+    # После способа оплаты спрашиваем наличие счёта
+    await query.edit_message_text("📑 Есть ли счёт / инвойс по этой покупке?", reply_markup=_get_invoice_keyboard())
+    return STATE_INVOICE
+
+
+async def callback_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбор статуса счёта (invoice)."""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    invoice_status = None
+    if data == CB_INV_YES:
+        invoice_status = "Yes"
+    elif data == CB_INV_NO:
+        invoice_status = "No"
+    elif data == CB_INV_PENDING:
+        invoice_status = "Pending"
+    
+    if invoice_status:
+        context.user_data["invoice_status"] = invoice_status
+    
+    await query.edit_message_text("🏷 Выберите тип расхода:", reply_markup=_get_expense_type_keyboard())
+    return STATE_EXPENSE_TYPE
+
+
+async def callback_expense_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбор типа расхода (expense_type)."""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    expense_type = None
+    if data == CB_EXP_SUBSCRIPTION:
+        expense_type = "Subscription"
+    elif data == CB_EXP_ONE_TIME:
+        expense_type = "One-time"
+    elif data == CB_EXP_TRAVEL:
+        expense_type = "Travel"
+    elif data == CB_EXP_TOOLS:
+        expense_type = "Tools/Capex"
+    elif data == CB_EXP_OTHER:
+        expense_type = "Other"
+    
+    if expense_type:
+        context.user_data["expense_type"] = expense_type
+    
     await query.edit_message_text("📝 Введите примечание (или '-' чтобы пропустить):")
     return STATE_NOTES
 
@@ -908,6 +1007,12 @@ def main():
             ],
             STATE_PAYMENT: [
                 CallbackQueryHandler(callback_payment, pattern=r"^(pay_|skip)"),
+            ],
+            STATE_INVOICE: [
+                CallbackQueryHandler(callback_invoice, pattern=r"^(inv_)"),
+            ],
+            STATE_EXPENSE_TYPE: [
+                CallbackQueryHandler(callback_expense_type, pattern=r"^(exp_)"),
             ],
             STATE_NOTES: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, state_notes),
