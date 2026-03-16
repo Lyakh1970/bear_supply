@@ -38,6 +38,7 @@ class ExpenseRowData:
     currency: str
     category: Optional[str] = None
     project: Optional[str] = None
+    legal_entity: Optional[str] = None
     payment_method: Optional[str] = None
     invoice: Optional[str] = None
     notes: Optional[str] = None
@@ -91,6 +92,7 @@ def append_row_to_sheet(data: ExpenseRowData) -> SheetWriteResult:
         "currency": data.currency or "EUR",
         "category": data.category or "",
         "project": data.project or "",
+        "legal_entity": data.legal_entity or "",
         "payment_method": data.payment_method or "",
         "invoice": data.invoice or "",
         "notes": data.notes or "",

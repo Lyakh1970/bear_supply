@@ -42,10 +42,11 @@ DB_AVAILABLE = False
     STATE_NEW_SUPPLIER,
     STATE_CATEGORY,
     STATE_PROJECT,
+    STATE_LEGAL_ENTITY,
     STATE_PAYMENT,
     STATE_NOTES,
     STATE_CONFIRM,
-) = range(12)
+) = range(13)
 
 # Callback data prefixes
 CB_SAVE = "save"
@@ -175,6 +176,24 @@ def _get_project_keyboard() -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup([[InlineKeyboardButton("⏭ Пропустить", callback_data=CB_SKIP)]])
 
 
+def _get_legal_entity_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура выбора компании (legal entity)."""
+    try:
+        entities = db.get_legal_entities()
+        buttons = [[InlineKeyboardButton(e["name"], callback_data=f"le_{e['code']}")] for e in entities]
+        buttons.append([InlineKeyboardButton("⏭ Пропустить", callback_data=CB_SKIP)])
+        return InlineKeyboardMarkup(buttons)
+    except Exception:
+        # Fallback: фиксированные 4 варианта
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("Host Marine sp. z o.o.", callback_data="le_HOST_MARINE_PL")],
+            [InlineKeyboardButton("Host Marine OU", callback_data="le_HOST_MARINE_OU")],
+            [InlineKeyboardButton("Autonomo Y8948566Q", callback_data="le_AUTONOMO")],
+            [InlineKeyboardButton("Personal", callback_data="le_PERSONAL")],
+            [InlineKeyboardButton("⏭ Пропустить", callback_data=CB_SKIP)],
+        ])
+
+
 def _get_payment_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура выбора способа оплаты."""
     try:
@@ -258,6 +277,7 @@ async def _save_to_db_and_sheets(
             
             category_id = context.user_data.get("category_id")
             project_id = context.user_data.get("project_id")
+            legal_entity_id = context.user_data.get("legal_entity_id")
             payment_method_id = context.user_data.get("payment_method_id")
             
             # Вычисляем total
@@ -276,6 +296,7 @@ async def _save_to_db_and_sheets(
                 supplier_name_raw=parsed.supplier_raw or parsed.supplier,
                 category_id=category_id,
                 project_id=project_id,
+                legal_entity_id=legal_entity_id,
                 payment_method_id=payment_method_id,
                 notes=parsed.notes,
                 document_id=result.document_id,
@@ -306,6 +327,7 @@ async def _save_to_db_and_sheets(
             currency=parsed.currency or "EUR",
             category=context.user_data.get("category_name") or config.DEFAULT_CATEGORY,
             project=context.user_data.get("project_name") or config.DEFAULT_PROJECT,
+            legal_entity=context.user_data.get("legal_entity_name"),
             payment_method=context.user_data.get("payment_method_name"),
             notes=parsed.notes,
             document_url=upload_result.public_url,  # Nextcloud public URL
@@ -769,6 +791,24 @@ async def callback_project(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
     
+    await query.edit_message_text("🏢 Выберите компанию:", reply_markup=_get_legal_entity_keyboard())
+    return STATE_LEGAL_ENTITY
+
+
+async def callback_legal_entity(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбор компании (legal entity)."""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    
+    if data != CB_SKIP and data.startswith("le_"):
+        code = data.replace("le_", "")
+        le = db.find_legal_entity_by_code(code)
+        if le:
+            context.user_data["legal_entity_id"] = le["id"]
+            context.user_data["legal_entity_name"] = le["name"]
+    
     await query.edit_message_text("💳 Выберите способ оплаты:", reply_markup=_get_payment_keyboard())
     return STATE_PAYMENT
 
@@ -783,6 +823,13 @@ async def callback_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data != CB_SKIP and data.startswith("pay_"):
         payment_id = int(data.replace("pay_", ""))
         context.user_data["payment_method_id"] = payment_id
+        try:
+            for m in db.get_payment_methods():
+                if m["id"] == payment_id:
+                    context.user_data["payment_method_name"] = m["name"]
+                    break
+        except Exception:
+            pass
     
     await query.edit_message_text("📝 Введите примечание (или '-' чтобы пропустить):")
     return STATE_NOTES
@@ -855,6 +902,9 @@ def main():
             ],
             STATE_PROJECT: [
                 CallbackQueryHandler(callback_project, pattern=r"^(proj_|skip)"),
+            ],
+            STATE_LEGAL_ENTITY: [
+                CallbackQueryHandler(callback_legal_entity, pattern=r"^(le_|skip)"),
             ],
             STATE_PAYMENT: [
                 CallbackQueryHandler(callback_payment, pattern=r"^(pay_|skip)"),

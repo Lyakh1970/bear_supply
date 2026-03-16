@@ -408,6 +408,51 @@ COMMENT ON COLUMN documents.upload_error IS 'Error message if upload failed';
 COMMENT ON COLUMN documents.drive_url IS 'DEPRECATED: Use public_url instead';
 ```
 
+### [v4] Справочник компаний (legal_entities) и ссылка в expense_entries
+
+```sql
+-- 1. Таблица справочника компаний
+CREATE TABLE IF NOT EXISTS legal_entities (
+    id   BIGSERIAL PRIMARY KEY,
+    code TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL
+);
+
+INSERT INTO legal_entities (code, name) VALUES
+('HOST_MARINE_PL', 'Host Marine sp. z o.o.'),
+('HOST_MARINE_OU', 'Host Marine OU'),
+('AUTONOMO', 'Autonomo Y8948566Q'),
+('PERSONAL', 'Personal')
+ON CONFLICT (code) DO NOTHING;
+
+-- 2. Ссылка в expense_entries
+ALTER TABLE expense_entries
+ADD COLUMN IF NOT EXISTS legal_entity_id BIGINT;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'expense_entries_legal_entity_id_fkey'
+    ) THEN
+        ALTER TABLE expense_entries
+        ADD CONSTRAINT expense_entries_legal_entity_id_fkey
+        FOREIGN KEY (legal_entity_id) REFERENCES legal_entities(id);
+    END IF;
+END$$;
+```
+
+### Очистка тестовых данных (перед боевым стартом)
+
+```sql
+-- Сначала посмотреть:
+-- SELECT id, original_filename, public_url FROM documents ORDER BY id;
+-- SELECT id, description, total, document_id FROM expense_entries ORDER BY id;
+
+TRUNCATE TABLE expense_entries RESTART IDENTITY CASCADE;
+TRUNCATE TABLE documents RESTART IDENTITY CASCADE;
+```
+
 ### [TODO] Добавить поле sheets_synced
 
 Для отслеживания синхронизации с Google Sheets:

@@ -65,6 +65,26 @@ def get_payment_methods() -> list[dict]:
             return [dict(row) for row in cur.fetchall()]
 
 
+def get_legal_entities() -> list[dict]:
+    """Список компаний (legal entities) для выбора в диалоге."""
+    with get_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT id, code, name FROM legal_entities ORDER BY id")
+            return [dict(row) for row in cur.fetchall()]
+
+
+def find_legal_entity_by_code(code: str) -> Optional[dict]:
+    """Найти компанию по коду."""
+    with get_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, code, name FROM legal_entities WHERE code = %s",
+                (code.strip(),)
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+
 def get_currencies() -> list[dict]:
     """Список валют."""
     with get_connection() as conn:
@@ -250,6 +270,7 @@ class ExpenseEntryData:
     supplier_name_raw: Optional[str] = None
     category_id: Optional[int] = None
     project_id: Optional[int] = None
+    legal_entity_id: Optional[int] = None
     payment_method_id: Optional[int] = None
     invoice: Optional[str] = None
     expense_type: Optional[str] = None
@@ -285,6 +306,7 @@ def insert_expense_entry(data: ExpenseEntryData) -> int:
                     currency_code,
                     category_id,
                     project_id,
+                    legal_entity_id,
                     payment_method_id,
                     invoice,
                     expense_type,
@@ -296,7 +318,7 @@ def insert_expense_entry(data: ExpenseEntryData) -> int:
                     parse_confidence
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 RETURNING id
             """, (
@@ -311,6 +333,7 @@ def insert_expense_entry(data: ExpenseEntryData) -> int:
                 data.currency_code,
                 data.category_id,
                 data.project_id,
+                data.legal_entity_id,
                 data.payment_method_id,
                 data.invoice,
                 data.expense_type,
