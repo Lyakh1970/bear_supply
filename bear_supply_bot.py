@@ -46,9 +46,11 @@ DB_AVAILABLE = False
     STATE_PAYMENT,
     STATE_INVOICE,
     STATE_EXPENSE_TYPE,
+    STATE_SELLER,
+    STATE_PRODUCT_LINK,
     STATE_NOTES,
     STATE_CONFIRM,
-) = range(15)
+) = range(17)
 
 # Callback data prefixes
 CB_SAVE = "save"
@@ -342,6 +344,8 @@ async def _save_to_db_and_sheets(
                 invoice=context.user_data.get("invoice_status"),
                 expense_type=context.user_data.get("expense_type"),
                 report_key=report_key,
+                seller_name=context.user_data.get("seller_name"),
+                product_link=context.user_data.get("product_link"),
                 notes=parsed.notes,
                 document_id=result.document_id,
                 parse_source=parsed.parse_source,
@@ -381,6 +385,8 @@ async def _save_to_db_and_sheets(
             invoice=context.user_data.get("invoice_status"),
             expense_type=context.user_data.get("expense_type"),
             report_key=report_key,
+            seller=context.user_data.get("seller_name") or "",
+            product_link=context.user_data.get("product_link") or "",
             notes=parsed.notes,
             document_url=upload_result.public_url,  # Nextcloud public URL
         )
@@ -561,6 +567,9 @@ async def callback_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             result_text += f"💰 {parsed.unit_price} {parsed.currency or ''}\n"
         if parsed.supplier:
             result_text += f"🏪 {parsed.supplier}\n"
+        seller_name = context.user_data.get("seller_name")
+        if seller_name:
+            result_text += f"🏬 Seller: {seller_name}\n"
         
         # Показываем ссылку на файл
         if save_result.storage_url:
@@ -755,9 +764,13 @@ async def callback_supplier(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return STATE_CONFIRM
     
-    # Полная форма — категория
-    await query.edit_message_text("📁 Выберите категорию:", reply_markup=_get_category_keyboard())
-    return STATE_CATEGORY
+    # Полная форма — сначала спрашиваем Seller
+    await query.edit_message_text(
+        "🏬 Введите продавца / магазин (Seller).\n"
+        "Например: Good Luck Electronic Products Store.\n"
+        "Или отправьте '-' чтобы пропустить."
+    )
+    return STATE_SELLER
 
 
 async def state_new_supplier(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -796,7 +809,33 @@ async def state_new_supplier(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return STATE_CONFIRM
     
-    # Полная форма — категория
+    # Полная форма — Seller
+    await update.message.reply_text(
+        "🏬 Введите продавца / магазин (Seller).\n"
+        "Или отправьте '-' чтобы пропустить."
+    )
+    return STATE_SELLER
+
+
+async def state_seller(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ввод seller_name (продавец/магазин)."""
+    text = (update.message.text or "").strip()
+    if text and text != "-":
+        context.user_data["seller_name"] = text
+    await update.message.reply_text(
+        "🔗 Вставьте ссылку на товар (Product link).\n"
+        "Или отправьте '-' чтобы пропустить."
+    )
+    return STATE_PRODUCT_LINK
+
+
+async def state_product_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ввод product_link (ссылка на товар)."""
+    text = (update.message.text or "").strip()
+    if text and text != "-":
+        context.user_data["product_link"] = text
+    
+    # Дальше стандартный поток: категория
     await update.message.reply_text("📁 Выберите категорию:", reply_markup=_get_category_keyboard())
     return STATE_CATEGORY
 
@@ -1007,6 +1046,12 @@ def main():
             ],
             STATE_PAYMENT: [
                 CallbackQueryHandler(callback_payment, pattern=r"^(pay_|skip)"),
+            ],
+            STATE_SELLER: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, state_seller),
+            ],
+            STATE_PRODUCT_LINK: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, state_product_link),
             ],
             STATE_INVOICE: [
                 CallbackQueryHandler(callback_invoice, pattern=r"^(inv_)"),

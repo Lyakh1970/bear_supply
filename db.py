@@ -275,6 +275,8 @@ class ExpenseEntryData:
     invoice: Optional[str] = None
     expense_type: Optional[str] = None
     report_key: Optional[str] = None
+    seller_name: Optional[str] = None
+    product_link: Optional[str] = None
     notes: Optional[str] = None
     document_id: Optional[int] = None
     parse_source: Optional[str] = None
@@ -311,6 +313,8 @@ def insert_expense_entry(data: ExpenseEntryData) -> int:
                     invoice,
                     expense_type,
                     report_key,
+                    seller_name,
+                    product_link,
                     notes,
                     document_id,
                     parse_source,
@@ -318,7 +322,7 @@ def insert_expense_entry(data: ExpenseEntryData) -> int:
                     parse_confidence
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 RETURNING id
             """, (
@@ -338,6 +342,8 @@ def insert_expense_entry(data: ExpenseEntryData) -> int:
                 data.invoice,
                 data.expense_type,
                 data.report_key,
+                data.seller_name,
+                data.product_link,
                 data.notes,
                 data.document_id,
                 data.parse_source,

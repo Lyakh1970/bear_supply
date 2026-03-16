@@ -43,6 +43,8 @@ class ExpenseRowData:
     invoice: Optional[str] = None
     expense_type: Optional[str] = None
     report_key: Optional[str] = None
+    seller: Optional[str] = None
+    product_link: Optional[str] = None
     notes: Optional[str] = None
     document_url: Optional[str] = None  # Ссылка на документ (Nextcloud public URL)
 
@@ -99,6 +101,8 @@ def append_row_to_sheet(data: ExpenseRowData) -> SheetWriteResult:
         "invoice": data.invoice or "",
         "expense_type": data.expense_type or "",
         "report_key": data.report_key or "",
+        "seller": data.seller or "",
+        "product_link": data.product_link or "",
         "notes": data.notes or "",
         "document_url": data.document_url or "",
     }
